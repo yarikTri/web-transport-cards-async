@@ -8,44 +8,58 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from concurrent import futures
 
-FAIL_PROBABILITY = 30
+FAIL_PROBABILITY = 0.1
+CORRECT_STATE_TO_FINALIZE = 'approved'
+RETRIES_AMOUNT = 3
 
 executor = futures.ThreadPoolExecutor(max_workers=1)
 
 def callback_url(id):
     return f'http://localhost:8080/tickets/{id}/finalize_writing'
 
-def do_long_processing(id):
-    print('Starting long processing...')
-    time.sleep(5)
-    print('Success or fail...')
-    time.sleep(5)
-    print('Long processing done')
+def do_long_writing(ticket_id):
+    print('Starting long process of writting...')
+    time.sleep(7)
+    print('Almost done...')
+    time.sleep(3)
+    print('Long process of writing done!')
 
     return {
-        'id': id,
+        'id': ticket_id,
         'res': get_res()
     }
 
 def get_res():
-    if random.random() * 100 < FAIL_PROBABILITY:
+    if random.random() < FAIL_PROBABILITY:
         return 'fail'
     return 'success'
 
 def result_callback(task):
     result = task.result()
 
-    resp = requests.put(callback_url(result["id"]), json={'state': result['res']}, timeout=3, headers={'X-SERVICE': 'true'})
-    print(f'\nMain service resp: {resp.json()}')
+    code = 0
+    tries_counter = 0
+    while code != 200 and tries_counter < RETRIES_AMOUNT:
+        resp = requests.put(
+            url = callback_url(result["id"]),
+            json = { 'state': result['res'] },
+            timeout = 3,
+            headers = { 'X-SERVICE': 'true' },
+        )
+        
+        print(f'\nMain service response: {resp.json()}')
+    
+        code = resp.status_code
+        tries_counter += 1
 
 @api_view(['POST'])
 def write_ticket(request, id):  
     ticketResp = requests.get(f'http://localhost:8080/tickets/{id}', headers={'X-SERVICE': 'true'})
     ticket = ticketResp.json()
-    if ticket['state'] != 'approved':
-        raise KeyError(f'Invalid ticket state {ticket['state']}')
-      
-    task = executor.submit(do_long_processing, id)
+    if ticket['state'] != CORRECT_STATE_TO_FINALIZE:
+        return HttpResponse(f'Invalid ticket state "{ticket['state']}"', status=400)
+
+    task = executor.submit(do_long_writing, id)
     task.add_done_callback(result_callback)
 
     return HttpResponse("Async job started")
